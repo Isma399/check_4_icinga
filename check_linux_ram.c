@@ -1,358 +1,300 @@
-/*
- * Check Linux Inode
- *
- */
-/***********************************************************************
-	Copyright 1988, 1989, 1991, 1992 by Carnegie Mellon University
+/*	Check_linux_ram
+	written from :
+ 	Check_cisco checks various snmp statistics related to Cisco devices.
+    Copyright (C) 2012  Jason Harris
 
-                      All Rights Reserved
+    This program is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
 
-Permission to use, copy, modify, and distribute this software and its 
-documentation for any purpose and without fee is hereby granted, 
-provided that the above copyright notice appear in all copies and that
-both that copyright notice and this permission notice appear in 
-supporting documentation, and that the name of CMU not be
-used in advertising or publicity pertaining to distribution of the
-software without specific, written prior permission.  
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
 
-CMU DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
-ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
-CMU BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
-ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
-WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
-ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
-SOFTWARE.
+    You should have received a copy of the GNU General Public License
+    along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-########################################################################
+ #############################################################################   
+ MakeFile :   gcc `net-snmp-config --cflags` `net-snmp-config --libs` `net-snmp-config --external-libs` check_linux_ram.c -o check_linux_ram
+ Usage :  ./check_linux_ram -v 2c -c public <HOSTNAME>
+ Debug :  ./check_linux_ram -v 2c -c public <HOSTNAME> -D ALL
+*/
 
-MakeFile = gcc `net-snmp-config --cflags` `net-snmp-config --libs` `net-snmp-config --external-libs` check_linux_inode.c -o check_linux_inode
-Usage :  ./check_linux_inode -v 2c -c public
-Debug :  ./check_linux_inode -v 2c -c public -D ALL
-******************************************************************/
 #include <net-snmp/net-snmp-config.h>
-
-#if HAVE_STDLIB_H
-#include <stdlib.h>
-#endif
-#if HAVE_UNISTD_H
-#include <unistd.h>
-#endif
-#if HAVE_STRING_H
-#include <string.h>
-#else
-#include <strings.h>
-#endif
-#include <sys/types.h>
-#if HAVE_NETINET_IN_H
-#include <netinet/in.h>
-#endif
-#include <stdio.h>
-#include <ctype.h>
-#if TIME_WITH_SYS_TIME
-# ifdef WIN32
-#  include <sys/timeb.h>
-# else
-#  include <sys/time.h>
-# endif
-# include <time.h>
-#else
-# if HAVE_SYS_TIME_H
-#  include <sys/time.h>
-# else
-#  include <time.h>
-# endif
-#endif
-#if HAVE_SYS_SELECT_H
-#include <sys/select.h>
-#endif
-#if HAVE_WINSOCK_H
-#include <winsock.h>
-#endif
-#if HAVE_NETDB_H
-#include <netdb.h>
-#endif
-#if HAVE_ARPA_INET_H
-#include <arpa/inet.h>
-#endif
-
 #include <net-snmp/net-snmp-includes.h>
-#include <regex.h>
+#include <stdio.h>
+#include <string.h>
 
-#define MAX_ERROR_MSG 0x1000
+/* Define useful variables */
+#define MISSING_OPTIONS "Unknown or missing options.\n"
 #define RESULT_OK 0
 #define RESULT_WARNING 1
 #define RESULT_CRITICAL 2
 #define RESULT_UNKNOWN 3
 
 /* Global Variables */
-
-int exitVal = RESULT_OK, warn = 80, crit = 90;
-int  failures = 0;
-char finalstr[2048],retstr[1024],mode[20];
+char retstr[500];
+int exitVal = RESULT_UNKNOWN, warn = 80, crit = 90;
+char mode[20];
 
 /* Function Definitions */
-char *checkINODE(struct snmp_session* session);
+char *checkRAM(struct snmp_session* session);
 
-void usage(void)
-{
-    fprintf(stderr, "Usage: snmpdf [-Cu] ");
-    snmp_parse_args_usage(stderr);
-    fprintf(stderr, "\n\n");
-    snmp_parse_args_descriptions(stderr);
-    fprintf(stderr, "\nsnmpdf options:\n");
-    fprintf(stderr,
-            "\t-Cu\tUse UCD-SNMP dskTable to do the calculations.\n");
-    fprintf(stderr,
-            "\t\t[Normally the HOST-RESOURCES-MIB is consulted first.]\n");
+/*
+  Print usage info.
+*/
+void usage(void) {
+	fprintf(stderr, "USAGE: check_linux_ram ");
+	snmp_parse_args_usage(stderr);
+	fprintf(stderr, " [OID]\n\n");
+	snmp_parse_args_descriptions(stderr);
+	fprintf(stderr, "Application specific options.\n");
+	fprintf(stderr, "  -C APPOPTS\n");
+	fprintf(stderr, "\t\t\t  c:  Set the critical threshold.\n");
+	fprintf(stderr, "\t\t\t  w:  Set the warning threshold.\n");
 }
 
-int ucd_mib = 0;
-
-static void optProc(int argc, char *const *argv, int opt)
-{
-    switch (opt) {
-    case 'C':
-        while (*optarg) {
-            switch (*optarg++) {
-            case 'u':
-                ucd_mib = 1;
-                break;
-            default:
-                fprintf(stderr,
-                        "Unknown flag passed to -C: %c\n", optarg[-1]);
-                exit(1);
-            }
-        }
-    }
+/*
+  Process input options.
+*/
+void optProc(int argc, char *const *argv, int opt) {
+	switch (opt) {
+		case 'C':
+			while (*optarg) {
+				switch (*optarg++) {
+					case 'c':
+						crit = atoi(argv[optind++]);
+						break;
+					case 'm':
+						strcpy(mode, argv[optind++]);
+						break;
+					case 'w':
+						warn = atoi(argv[optind++]);
+						break;
+				}
+			}
+	break;
+	}
 }
-struct hrStorageTable {
-    u_long          hrStorageIndex;
-    oid            *hrStorageType;
-    char           *hrStorageDescr;
-    u_long          hrStorageAllocationUnits;
-    u_long          hrStorageSize;
-    u_long          hrStorageUsed;
-};
-
-int add(netsnmp_pdu *pdu, const char *mibnodename, oid * index, size_t indexlen) {
-    oid             base[MAX_OID_LEN];
-    size_t          base_length = MAX_OID_LEN;
-
-    memset(base, 0, MAX_OID_LEN * sizeof(oid));
-
-    if (!snmp_parse_oid(mibnodename, base, &base_length)) {
-        snmp_perror(mibnodename);
-        fprintf(stderr, "couldn't find mib node %s, giving up\n",
-                mibnodename);
-        exit(1);
+char* readable_fs(long unsigned bytes_size, char *human_size) {
+    int i = 0;
+    const char* units[] = {"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"};
+    while (bytes_size > 1024) {
+        bytes_size /= 1024;
+        i++;
     }
-
-    if (index && indexlen) {
-        memcpy(&(base[base_length]), index, indexlen * sizeof(oid));
-        base_length += indexlen;
-    }
-    DEBUGMSGTL(("add", "created: "));
-    DEBUGMSGOID(("add", base, base_length));
-    DEBUGMSG(("add", "\n"));
-    snmp_add_null_var(pdu, base, base_length);
-
-    return base_length;
-}
-netsnmp_variable_list * collect(netsnmp_session * ss, netsnmp_pdu *pdu, oid * base, size_t base_length){
-    netsnmp_pdu    *response;
-    int             running = 1;
-    netsnmp_variable_list *saved = NULL, **vlpp = &saved;
-    int             status;
-
-    while (running) {
-        status = snmp_synch_response(ss, pdu, &response);
-        if (status != STAT_SUCCESS || !response) {
-            snmp_sess_perror("snmpdf", ss);
-            exit(1);
-        }
-        if (response && snmp_oid_compare(response->variables->name,
-                                         SNMP_MIN(base_length,
-                                                  response->variables->
-                                                  name_length), base,
-                                         base_length) != 0)
-            running = 0;
-        else {
-            *vlpp = response->variables;
-            (*vlpp)->next_variable = NULL;  
-            pdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
-            snmp_add_null_var(pdu, (*vlpp)->name, (*vlpp)->name_length);
-            vlpp = &((*vlpp)->next_variable);
-            response->variables = NULL; 
-        }
-        snmp_free_pdu(response);
-    }
-    return saved;
+    sprintf(human_size, "%lu%s", bytes_size, units[i]);
+    return human_size;
 }
 
-/* Main program */
+/* Main program 
+	Queries various SNMP values on cisco devices.
+*/
 int main(int argc, char *argv[]) {
-    char* output;
-    struct snmp_session session;
-    char arg;
+	char* output;
+	struct snmp_session session;
+	char arg;
+//	int i;
+//	long snmpVer;
 
-    init_snmp("Linux_checks");
-    
-    snmp_sess_init( &session );
+	/* Initialize and build snmp session, add version, community, host, etc */
+	init_snmp("Linux_checks");
+	
+	snmp_sess_init( &session );
 
-    switch (arg = snmp_parse_args(argc, argv, &session, "C:", optProc)) {
-    case -3:
-        exit(1);
-    case -2:
-        exit(0);
-    case -1:
-        usage();
-        exit(1);
-    default:
-        break;
-    }
-    
-    /* Check warning/critical test values to verify they are within the appropriate ranges */
-    if ((crit > 100) && (strcmp(mode, "sessions"))) {
-        printf("Critical threshold should be less than 100!\n");
-        usage();
-        exit(RESULT_UNKNOWN);
-    }
-    else if (crit < 0) {
-        printf("Critical threshould must be greater than 0!\n");
-        usage();
-        exit(RESULT_UNKNOWN);
-    }
-    else if ((warn < 0) && (strcmp(mode, "sessions"))) {
-        printf("Warning threshold must be greater than or equal to 0!\n");
-        usage();
-        exit(RESULT_UNKNOWN);
-    }
-    else if (warn > crit) {
-        printf("Warning threshold must not be greater than critical threshold!\n");
-        usage();
-        exit(RESULT_UNKNOWN);
-    }
-    output = checkINODE(&session);
-    printf("%s", output);
-    return exitVal;
+	switch (arg = snmp_parse_args(argc, argv, &session, "C:", optProc)) {
+	case -3:
+		exit(1);
+	case -2:
+		exit(0);
+	case -1:
+		usage();
+		exit(1);
+	default:
+		break;
+	}
+	
+	/* Check warning/critical test values to verify they are within the appropriate ranges */
+	if ((crit > 100) && (strcmp(mode, "sessions"))) {
+		printf("Critical threshold should be less than 100!\n");
+		usage();
+		exit(RESULT_UNKNOWN);
+	}
+	else if (crit < 0) {
+		printf("Critical threshould must be greater than 0!\n");
+		usage();
+		exit(RESULT_UNKNOWN);
+	}
+	else if ((warn < 0) && (strcmp(mode, "sessions"))) {
+		printf("Warning threshold must be greater than or equal to 0!\n");
+		usage();
+		exit(RESULT_UNKNOWN);
+	}
+	else if (warn > crit) {
+		printf("Warning threshold must not be greater than critical threshold!\n");
+		usage();
+		exit(RESULT_UNKNOWN);
+	}
+		
+
+	output = checkRAM(&session);
+	
+
+	printf("%s", output);
+	return exitVal;
 }
+
+
+
+/*
+  Check the RAM load percentage on Linux Devices.
+*/
+char *checkRAM(struct snmp_session* session) {
+	struct snmp_session *s_handle = NULL;
+	struct snmp_pdu *pdu = NULL;
+	struct snmp_pdu *reply = NULL;
+	struct variable_list *vars;
+	int status ;
+	double total,buffers,cache,totalSwap,availSwap,available,used,unused,swap;
+	float usedPercent;
+	char	human_size[10];
+	
+	oid mib_total[] = { 1, 3, 6, 1, 4, 1, 2021, 4, 5, 0 };
+	oid mib_buffers[] = { 1, 3, 6, 1, 4, 1, 2021, 4, 14, 0};
+    oid mib_cache[] = { 1, 3, 6, 1, 4, 1, 2021, 4, 15, 0};
+    oid mib_totalSwap[] = { 1,3, 6, 1, 4, 1, 2021, 4, 3, 0};
+    oid mib_availSwap[] = { 1, 3, 6, 1, 4, 1, 2021, 4, 4, 0};
+    oid mib_available[] = { 1, 3, 6, 1, 4, 1, 2021, 4, 6, 0};
+	
+	/* Open snmp session, print error if one occurs */
+	s_handle = snmp_open( session );
+	if (!s_handle) {
+		printf("ERROR - Problem opening session!\n");
+		exit(RESULT_CRITICAL);
+	}
+	
+	/* Build PDU and add desired OID's */
+	pdu = snmp_pdu_create(SNMP_MSG_GET);
+
+	snmp_add_null_var(pdu, mib_total, OID_LENGTH(mib_total));
+	snmp_add_null_var(pdu, mib_buffers, OID_LENGTH(mib_buffers));
+	snmp_add_null_var(pdu, mib_cache, OID_LENGTH(mib_cache));
+	snmp_add_null_var(pdu, mib_totalSwap, OID_LENGTH(mib_totalSwap));
+	snmp_add_null_var(pdu, mib_availSwap, OID_LENGTH(mib_availSwap));
+	snmp_add_null_var(pdu, mib_available, OID_LENGTH(mib_available));
+		
+			
+	/* Check if snmp synchs correctly, if not exit the program */
+	status = snmp_synch_response(s_handle, pdu, &reply);
+	if (status == STAT_ERROR) {
+		printf("ERROR - Problem while querying device!\n");
+		exit(RESULT_CRITICAL);
+	}
+	else if (status == STAT_TIMEOUT) {
+		printf("ERROR - Connection timed out!\n");
+		exit(RESULT_CRITICAL);
+	}
+	else if (reply->errstat != SNMP_ERR_NOERROR) {
+		switch (reply->errstat) {
+			case SNMP_ERR_NOSUCHNAME:
+				printf("ERROR - Device does not support that feature!\n");
+				break;
+			case SNMP_ERR_TOOBIG:
+				printf("ERROR - Result generated too much data!\n");
+				break;
+			case SNMP_ERR_READONLY:
+				printf("ERROR - Value is read only!\n");
+				break;
+			case SNMP_ERR_BADVALUE:
+			case SNMP_ERR_GENERR:
+			case SNMP_ERR_NOACCESS:
+			case SNMP_ERR_WRONGTYPE:
+			case SNMP_ERR_WRONGLENGTH:
+			case SNMP_ERR_WRONGENCODING:
+			case SNMP_ERR_WRONGVALUE:
+			case SNMP_ERR_NOCREATION:
+			case SNMP_ERR_INCONSISTENTVALUE:
+			case SNMP_ERR_RESOURCEUNAVAILABLE:
+			case SNMP_ERR_COMMITFAILED:
+			case SNMP_ERR_UNDOFAILED:
+			case SNMP_ERR_AUTHORIZATIONERROR:
+			case SNMP_ERR_NOTWRITABLE:
+			case SNMP_ERR_INCONSISTENTNAME:
+			default:
+				printf("ERROR - Unknown error!\n");
+		}
+		exit(RESULT_CRITICAL);
+	}
+		
+	
+  /* Read out data returned from device, print error if data is NULL */
+	
+	
+	
+	vars = reply->variables;
+	if ((vars == NULL) || (vars->type == ASN_NULL)) {
+		printf("ERROR - No data recieved from device\n");
+		exit(RESULT_UNKNOWN);
+	}
+	total = (int)1024*(*vars->val.integer);
+
+	vars = vars->next_variable;
+	if ((vars == NULL) || (vars->type == ASN_NULL)) {
+		printf("ERROR - No data recieved from device\n");
+		exit(RESULT_UNKNOWN);
+	}
+	buffers = (int)1024*(*vars->val.integer);
+	
+	vars = vars->next_variable;
+	if ((vars == NULL) || (vars->type == ASN_NULL)) {
+		printf("ERROR - No data recieved from device\n");
+		exit(RESULT_UNKNOWN);
+	}
+	cache = (int)1024*(*vars->val.integer);
+	
+	vars = vars->next_variable;
+	if ((vars == NULL) || (vars->type == ASN_NULL)) {
+		printf("ERROR - No data recieved from device\n");
+		exit(RESULT_UNKNOWN);
+	}
+	totalSwap = (int)1024*(*vars->val.integer);
+	
+	vars = vars->next_variable;
+	if ((vars == NULL) || (vars->type == ASN_NULL)) {
+		printf("ERROR - No data recieved from device\n");
+		exit(RESULT_UNKNOWN);
+	}
+	availSwap = (int)1024*(*vars->val.integer);
+
+	vars = vars->next_variable;
+	if ((vars == NULL) || (vars->type == ASN_NULL)) {
+		printf("ERROR - No data recieved from device\n");
+		exit(RESULT_UNKNOWN);
+	}
+	available = (int)1024*(*vars->val.integer);
+	
+	/*Calcul des valeurs */
+	used = (total-(buffers+cache+available));
+    swap = (totalSwap-availSwap);
+    usedPercent = (float)(total - buffers - cache -available)*100/total;
+    unused = total - used;
     
-
-char *checkINODE(struct snmp_session* session) {
-    //struct snmp_session *ss = NULL;
-    netsnmp_session  *ss;
-    netsnmp_pdu    *pdu;
-    netsnmp_pdu    *response;
-    oid             base[MAX_OID_LEN];
-    size_t          base_length;
-    netsnmp_variable_list *saved = NULL, *vlp = saved, *vlp2;
-    int status ;
-    char partstr[1024];
-    int usedPercent;
-    int testVal=RESULT_OK;
-    
-
-    /* Open snmp session, print error if one occurs */
-    ss = snmp_open(session);
-    if (!ss) {
-        printf("ERROR - Problem opening session!\n");
-        exit(RESULT_CRITICAL);
-    }
-    pdu = snmp_pdu_create(SNMP_MSG_GETNEXT);
-    base_length = add(pdu, "UCD-SNMP-MIB:dskIndex", NULL, 0);
-    memcpy(base, pdu->variables->name, base_length * sizeof(oid));
-
-    vlp = collect(ss, pdu, base, base_length);
-    
-    while (vlp) {
-        char            descr[SPRINT_MAX_LEN];
-        
-        pdu = snmp_pdu_create(SNMP_MSG_GET);
-
-        add(pdu, "UCD-SNMP-MIB:dskPath", &(vlp->name[base_length]), vlp->name_length - base_length);
-        add(pdu, "UCD-SNMP-MIB:dskPercentNode", &(vlp->name[base_length]), vlp->name_length - base_length);
-        
-        
-        status = snmp_synch_response(ss, pdu, &response);
-        if (status == STAT_ERROR) {
-            printf("ERROR - Problem while querying device!\n");
-            exit(RESULT_CRITICAL);
-        }
-        else if (status == STAT_TIMEOUT) {
-            printf("ERROR - Connection timed out!\n");
-            exit(RESULT_CRITICAL);
-        }
-        else if (response->errstat != SNMP_ERR_NOERROR) {
-            switch (response->errstat) {
-                case SNMP_ERR_NOSUCHNAME:
-                    printf("ERROR - Device does not support that feature!\n");
-                    break;
-                case SNMP_ERR_TOOBIG:
-                    printf("ERROR - Result generated too much data!\n");
-                    break;
-                case SNMP_ERR_READONLY:
-                    printf("ERROR - Value is read only!\n");
-                    break;
-                case SNMP_ERR_BADVALUE:
-                case SNMP_ERR_GENERR:
-                case SNMP_ERR_NOACCESS:
-                case SNMP_ERR_WRONGTYPE:
-                case SNMP_ERR_WRONGLENGTH:
-                case SNMP_ERR_WRONGENCODING:
-                case SNMP_ERR_WRONGVALUE:
-                case SNMP_ERR_NOCREATION:
-                case SNMP_ERR_INCONSISTENTVALUE:
-                case SNMP_ERR_RESOURCEUNAVAILABLE:
-                case SNMP_ERR_COMMITFAILED:
-                case SNMP_ERR_UNDOFAILED:
-                case SNMP_ERR_AUTHORIZATIONERROR:
-                case SNMP_ERR_NOTWRITABLE:
-                case SNMP_ERR_INCONSISTENTNAME:
-                default:
-                    printf("ERROR - Unknown error!\n");
-            }
-            exit(RESULT_CRITICAL);
-        }
-
-        vlp2 = response->variables;
-        memcpy(descr, vlp2->val.string, vlp2->val_len);
-        descr[vlp2->val_len] = '\0';
-
-        vlp2 = vlp2->next_variable;
-        usedPercent = *(vlp2->val.integer);
-        
-            if (usedPercent > crit) {
-                testVal = RESULT_CRITICAL;
-                sprintf(partstr, "%s(%i%%); ", descr, usedPercent);
-            }
-            else if (usedPercent > warn) {
-                testVal = RESULT_WARNING;
-                sprintf(partstr, "%s(%i%%); ", descr, usedPercent);
-            }
-            else {
-                testVal = RESULT_OK;
-                sprintf(partstr, "%s(%i%%); ", descr, usedPercent);
-            }
-            strcat(retstr,partstr);
-
-        vlp = vlp->next_variable;
-        if (testVal == RESULT_CRITICAL){
-            exitVal = testVal;
-        }
-        else if (testVal == RESULT_WARNING){
-            exitVal = testVal;
-        }
-        snmp_free_pdu(response);
-    }
-    if (exitVal == RESULT_CRITICAL){
-        sprintf(finalstr,"CRITICAL - %s", retstr );
-    }
-    else if (exitVal == RESULT_WARNING){
-        sprintf(finalstr,"WARNING - %s", retstr );
-    }
-    else {
-        sprintf(finalstr,"OK - %s", retstr );
-    }
-    snmp_close(ss);
-    return finalstr;
-}                     /* end main() */
+	if (usedPercent > crit) {
+		exitVal = RESULT_CRITICAL;
+		sprintf(retstr, "CRITICAL - %.2f%% used on %s  | usedReal=%.f buffers=%.f cache=%.f unusedReal=%.f usedSwap=%.f total=%.f \n", usedPercent, readable_fs(total, human_size) , used, buffers, cache, unused, swap, total);
+	}
+	else if (usedPercent > warn) {
+		exitVal = RESULT_WARNING;
+		sprintf(retstr, "WARNING - %.2f%% used on %s  | usedReal=%.f buffers=%.f cache=%.f unusedReal=%.f usedSwap=%.f total=%.f \n", usedPercent, readable_fs(total, human_size), used, buffers, cache, unused, swap, total);
+	}
+	else {
+		exitVal = RESULT_OK;
+		sprintf(retstr, "OK - %.2f%% used on %s  | usedReal=%.f buffers=%.f cache=%.f unusedReal=%.f usedSwap=%.f total=%.f \n", usedPercent, readable_fs(total, human_size), used, buffers, cache, unused, swap, total);
+	}
+	
+	snmp_free_pdu(reply);
+	snmp_close(s_handle);
+	return retstr;
+}
